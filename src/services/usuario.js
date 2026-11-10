@@ -14,6 +14,7 @@ async function manejarRespuesta(res) {
 export async function obtenerUsuarios() {
   const res = await fetch(`${API_URL}/users`)
   const data = await manejarRespuesta(res)
+  console.log(data)
   return data.users
 }
 
