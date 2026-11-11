@@ -1,4 +1,4 @@
-import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom'
+import { HashRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom'
 import Inicio from './pages/Inicio'
 import MisCompaneros from './pages/MisCompaneros'
 import Registrarme from './pages/Registrarme'
@@ -12,7 +12,7 @@ const linkNav = ({ isActive }) =>
 
 function App() {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <div className="min-h-svh bg-neutral-50 text-neutral-900">
         <header className="sticky top-0 z-10 border-b border-neutral-200 bg-white/80 backdrop-blur-md">
           <nav className="mx-auto flex h-16 max-w-5xl items-center justify-between gap-4 px-4">
@@ -47,7 +47,7 @@ function App() {
           </Routes>
         </main>
       </div>
-    </BrowserRouter>
+    </HashRouter>
   )
 }
 

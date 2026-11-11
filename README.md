@@ -1,16 +1,40 @@
-# React + Vite
+# MiCompañero
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Frontend en React + Vite para la comunidad de la clase: registro de estudiantes y listado de compañeros. Consume una API REST externa.
 
-Currently, two official plugins are available:
+## Funcionalidades
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Inicio** (`/`): página de bienvenida.
+- **Mis compañeros** (`/#/mis-companeros`): lista los usuarios registrados (`GET /users`) con buscador por nombre, email o RUT.
+- **Registrarme** (`/#/registrarme`): formulario de registro (`POST /auth/register`); al registrarse guarda `token` y `user` en `localStorage`.
 
-## React Compiler
+## Instalación
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+git clone https://github.com/cayocft/mi-clase-react.git
+cd mi-clase-react
+npm install
+```
 
-## Expanding the ESLint configuration
+## Variables de entorno
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Crear un archivo `.env` en la raíz del proyecto:
+
+```env
+VITE_API_URL=https://backend-react-fcsl.onrender.com/api-backend
+```
+
+## Ejecución
+
+```bash
+npm run dev       # desarrollo → http://localhost:5173/
+npm run build     # build de producción → dist/
+npm run preview   # previsualizar el build
+npm run deploy    # publicar en GitHub Pages
+```
+
+Deploy: https://cayocft.github.io/mi-clase-react/
+
+## Stack
+
+React 19 · React Router (HashRouter) · Tailwind CSS 4 · Vite 8
