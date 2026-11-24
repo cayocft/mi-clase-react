@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { crearComentario, obtenerComentarios } from '../services/comentario'
 import { crearPublicacion, obtenerPublicaciones } from '../services/publicacion'
 
 function fechaPublicacion(createdAt) {
@@ -29,20 +30,65 @@ function Publicaciones() {
   const [token, setToken] = useState(() => localStorage.getItem('token') || '')
   const [publicando, setPublicando] = useState(false)
   const [errorCreacion, setErrorCreacion] = useState('')
+  const [contenidosComentario, setContenidosComentario] = useState({})
+  const [usuariosComentario, setUsuariosComentario] = useState({})
+  const [comentariosEnviando, setComentariosEnviando] = useState({})
+  const [erroresComentario, setErroresComentario] = useState({})
+  const [mensajesComentario, setMensajesComentario] = useState({})
+  const [erroresCargaComentarios, setErroresCargaComentarios] = useState({})
+  const [comentariosRecargando, setComentariosRecargando] = useState({})
 
   useEffect(() => {
     let activa = true
 
-    obtenerPublicaciones()
-      .then((datos) => {
-        if (activa) setPublicaciones(datos)
-      })
-      .catch((e) => {
+    async function cargarPublicaciones() {
+      try {
+        const datos = await obtenerPublicaciones()
+        const resultadosComentarios = await Promise.all(
+          datos.map(async (publicacion) => {
+            try {
+              return {
+                postId: publicacion.id,
+                comentarios: await obtenerComentarios(publicacion.id),
+              }
+            } catch (e) {
+              return { postId: publicacion.id, error: e.message }
+            }
+          }),
+        )
+
+        if (!activa) return
+
+        const comentariosPorPost = Object.fromEntries(
+          resultadosComentarios.map(({ postId, comentarios }) => [
+            postId,
+            comentarios || [],
+          ]),
+        )
+        setErroresCargaComentarios(
+          Object.fromEntries(
+            resultadosComentarios
+              .filter((resultado) => resultado.error)
+              .map(({ postId, error: errorComentarios }) => [
+                postId,
+                errorComentarios,
+              ]),
+          ),
+        )
+        setPublicaciones(
+          datos.map((publicacion) => ({
+            ...publicacion,
+            comments: comentariosPorPost[publicacion.id] || [],
+          })),
+        )
+      } catch (e) {
         if (activa) setError(e.message)
-      })
-      .finally(() => {
+      } finally {
         if (activa) setCargando(false)
-      })
+      }
+    }
+
+    cargarPublicaciones()
 
     return () => {
       activa = false
@@ -53,6 +99,29 @@ function Publicaciones() {
     setCargando(true)
     setError('')
     setIntento((actual) => actual + 1)
+  }
+
+  async function recargarComentarios(postId) {
+    if (comentariosRecargando[postId]) return
+
+    setComentariosRecargando((actuales) => ({ ...actuales, [postId]: true }))
+    setErroresCargaComentarios((actuales) => ({ ...actuales, [postId]: '' }))
+
+    try {
+      const comentarios = await obtenerComentarios(postId)
+      setPublicaciones((actuales) =>
+        actuales.map((publicacion) =>
+          publicacion.id === postId ? { ...publicacion, comments: comentarios } : publicacion,
+        ),
+      )
+    } catch (e) {
+      setErroresCargaComentarios((actuales) => ({
+        ...actuales,
+        [postId]: e.message,
+      }))
+    } finally {
+      setComentariosRecargando((actuales) => ({ ...actuales, [postId]: false }))
+    }
   }
 
   function abrirModal() {
@@ -94,6 +163,54 @@ function Publicaciones() {
       setErrorCreacion(e.message)
     } finally {
       setPublicando(false)
+    }
+  }
+
+  async function enviarComentario(e, postId) {
+    e.preventDefault()
+    if (comentariosEnviando[postId]) return
+
+    const content = (contenidosComentario[postId] || '').trim()
+    const userId = (usuariosComentario[postId] || '').trim()
+
+    if (!content || content.length > 500) {
+      setErroresComentario((actuales) => ({
+        ...actuales,
+        [postId]: 'Escribe un comentario de entre 1 y 500 caracteres.',
+      }))
+      return
+    }
+
+    setComentariosEnviando((actuales) => ({ ...actuales, [postId]: true }))
+    setErroresComentario((actuales) => ({ ...actuales, [postId]: '' }))
+    setMensajesComentario((actuales) => ({ ...actuales, [postId]: '' }))
+
+    try {
+      const comentarioCreado = await crearComentario(postId, {
+        content,
+        ...(userId ? { userId } : {}),
+      })
+
+      setPublicaciones((actuales) =>
+        actuales.map((publicacion) =>
+          publicacion.id === postId
+            ? {
+                ...publicacion,
+                commentsCount: (publicacion.commentsCount ?? 0) + 1,
+                comments: [...(publicacion.comments || []), comentarioCreado],
+              }
+            : publicacion,
+        ),
+      )
+      setContenidosComentario((actuales) => ({ ...actuales, [postId]: '' }))
+      setMensajesComentario((actuales) => ({
+        ...actuales,
+        [postId]: 'Comentario publicado.',
+      }))
+    } catch (e) {
+      setErroresComentario((actuales) => ({ ...actuales, [postId]: e.message }))
+    } finally {
+      setComentariosEnviando((actuales) => ({ ...actuales, [postId]: false }))
     }
   }
 
@@ -210,6 +327,7 @@ function Publicaciones() {
         <section className="space-y-4" aria-label="Todas las publicaciones">
           {publicaciones.map((publicacion) => {
             const autor = publicacion.author?.name || 'Usuario'
+            const comentarios = publicacion.comments || []
             const reacciones =
               (publicacion.reactions?.like ?? 0) +
               (publicacion.reactions?.love ?? 0)
@@ -281,6 +399,158 @@ function Publicaciones() {
                     {publicacion.commentsCount ?? 0}
                   </span>
                 </footer>
+
+                <form
+                  onSubmit={(e) => enviarComentario(e, publicacion.id)}
+                  className="mt-4 border-t border-neutral-100 pt-4"
+                >
+                  <label
+                    htmlFor={`comentario-contenido-${publicacion.id}`}
+                    className="sr-only"
+                  >
+                    Escribe un comentario
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      id={`comentario-contenido-${publicacion.id}`}
+                      type="text"
+                      value={contenidosComentario[publicacion.id] || ''}
+                      onChange={(e) =>
+                        setContenidosComentario((actuales) => ({
+                          ...actuales,
+                          [publicacion.id]: e.target.value,
+                        }))
+                      }
+                      placeholder="Escribe un comentario..."
+                      maxLength={500}
+                      required
+                      disabled={comentariosEnviando[publicacion.id]}
+                      className="min-w-0 flex-1 rounded-full border border-neutral-200 bg-neutral-50 px-4 py-2.5 text-sm text-neutral-900 outline-none transition-colors placeholder:text-neutral-400 focus:border-violet-500 focus:bg-white focus:ring-2 focus:ring-violet-500/20 disabled:opacity-60"
+                    />
+                    <button
+                      type="submit"
+                      disabled={comentariosEnviando[publicacion.id]}
+                      className="shrink-0 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {comentariosEnviando[publicacion.id] ? 'Enviando…' : 'Enviar'}
+                    </button>
+                  </div>
+                  <label
+                    htmlFor={`comentario-usuario-${publicacion.id}`}
+                    className="sr-only"
+                  >
+                    ID de usuario opcional para pruebas
+                  </label>
+                  <input
+                    id={`comentario-usuario-${publicacion.id}`}
+                    type="text"
+                    value={usuariosComentario[publicacion.id] || ''}
+                    onChange={(e) =>
+                      setUsuariosComentario((actuales) => ({
+                        ...actuales,
+                        [publicacion.id]: e.target.value,
+                      }))
+                    }
+                    placeholder="ID de usuario (opcional, para pruebas)"
+                    autoComplete="off"
+                    spellCheck="false"
+                    disabled={comentariosEnviando[publicacion.id]}
+                    className="mt-2 w-full rounded-xl border border-neutral-200 bg-white px-3.5 py-2 text-xs text-neutral-700 outline-none transition-colors placeholder:text-neutral-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 disabled:opacity-60"
+                  />
+                  <p className="mt-1.5 text-xs text-neutral-400">
+                    Presiona Enter para comentar. Sin ID, el comentario será anónimo.
+                  </p>
+                  {erroresComentario[publicacion.id] && (
+                    <p
+                      role="alert"
+                      className="mt-2 text-sm text-red-600"
+                    >
+                      {erroresComentario[publicacion.id]}
+                    </p>
+                  )}
+                  {mensajesComentario[publicacion.id] && (
+                    <p
+                      role="status"
+                      className="mt-2 text-sm text-emerald-700"
+                    >
+                      {mensajesComentario[publicacion.id]}
+                    </p>
+                  )}
+                  {comentariosEnviando[publicacion.id] && (
+                    <p role="status" className="mt-2 text-sm text-neutral-500">
+                      Publicando comentario…
+                    </p>
+                  )}
+                </form>
+
+                <section
+                  className="mt-4 border-t border-neutral-100 pt-4"
+                  aria-label={`Comentarios de ${publicacion.title}`}
+                >
+                  <h3 className="mb-3 text-sm font-semibold text-neutral-700">
+                    Comentarios ({comentarios.length})
+                  </h3>
+                  {erroresCargaComentarios[publicacion.id] ? (
+                    <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">
+                      <p role="alert">
+                        No se pudieron cargar los comentarios:{' '}
+                        {erroresCargaComentarios[publicacion.id]}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => recargarComentarios(publicacion.id)}
+                        disabled={comentariosRecargando[publicacion.id]}
+                        className="mt-2 font-semibold underline disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {comentariosRecargando[publicacion.id]
+                          ? 'Cargando…'
+                          : 'Reintentar'}
+                      </button>
+                    </div>
+                  ) : comentariosRecargando[publicacion.id] ? (
+                    <p role="status" className="text-sm text-neutral-500">
+                      Cargando comentarios…
+                    </p>
+                  ) : comentarios.length === 0 ? (
+                    <p className="text-sm text-neutral-500">
+                      Aún no hay comentarios.
+                    </p>
+                  ) : (
+                    <ul className="space-y-3">
+                      {comentarios.map((comentario) => {
+                        const nombreComentario =
+                          comentario.author?.name || 'Anónimo'
+
+                        return (
+                          <li
+                            key={comentario.id}
+                            className="flex items-start gap-2.5"
+                          >
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xs font-semibold text-violet-700">
+                              {inicialAutor(nombreComentario)}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="inline-block max-w-full rounded-2xl bg-neutral-100 px-4 py-2.5">
+                                <p className="text-xs font-semibold text-neutral-800">
+                                  {nombreComentario}
+                                </p>
+                                <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-5 text-neutral-700">
+                                  {comentario.content}
+                                </p>
+                              </div>
+                              <time
+                                className="mt-1 block px-3 text-xs text-neutral-400"
+                                dateTime={comentario.createdAt || undefined}
+                              >
+                                {fechaPublicacion(comentario.createdAt)}
+                              </time>
+                            </div>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
+                </section>
               </article>
             )
           })}
