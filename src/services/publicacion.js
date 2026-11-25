@@ -1,15 +1,21 @@
 const API_URL = import.meta.env.VITE_API_URL
 
-// GET /posts → devuelve la lista de publicaciones registradas
-export async function obtenerPublicaciones() {
-  const respuesta = await fetch(`${API_URL}/posts`)
+// GET /posts?limit=10&cursor=... → devuelve { posts, nextCursor }
+// cursor = id del último post cargado; sin cursor trae la primera página
+export async function obtenerPublicaciones(cursor) {
+  let url = `${API_URL}/posts?limit=10`
+  if (cursor) url += `&cursor=${cursor}`
+
+  const respuesta = await fetch(url)
   const datos = await respuesta.json()
 
   if (!respuesta.ok) {
-    throw new Error('No se pudieron obtener las publicaciones')
+    const error = new Error(datos.error || 'No se pudieron obtener las publicaciones')
+    error.status = respuesta.status
+    throw error
   }
 
-  return datos.posts
+  return datos
 }
 
 // POST /posts → crea una publicación y devuelve el post creado
@@ -31,7 +37,10 @@ export async function crearPublicacion(publicacion) {
   const datos = await respuesta.json()
 
   if (!respuesta.ok) {
-    throw new Error(datos.error || 'No se pudo crear la publicación')
+    // guardamos el status para que la app pueda detectar un 401 (sesión expirada)
+    const error = new Error(datos.error || 'No se pudo crear la publicación')
+    error.status = respuesta.status
+    throw error
   }
 
   return datos.post

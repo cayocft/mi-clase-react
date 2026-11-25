@@ -13,6 +13,22 @@ export async function obtenerUsuarios() {
   return datos.users
 }
 
+// POST /auth/login → inicia sesión y devuelve { user, token }
+export async function iniciarSesion(credenciales) {
+  const respuesta = await fetch(`${API_URL}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(credenciales),
+  })
+  const datos = await respuesta.json()
+
+  if (!respuesta.ok) {
+    throw new Error(datos.error || 'No se pudo iniciar sesión')
+  }
+
+  return datos
+}
+
 // POST /auth/register → crea un usuario y devuelve { user, token }
 export async function registrarUsuario(usuario) {
   const respuesta = await fetch(`${API_URL}/auth/register`, {

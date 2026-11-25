@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+@theme {
+  --color-cft-naranja: #EB6935;
+  --color-cft-coral: #F28255;
+  --color-cft-durazno: #F9B9A2;
+  --color-cft-carbon: #383838;
+}
+
 body {
   font-family:
     'Inter',

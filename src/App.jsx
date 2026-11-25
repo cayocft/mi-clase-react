@@ -1,53 +1,97 @@
+import { useState } from 'react'
 import { HashRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom'
-import Inicio from './pages/Inicio'
+import Acceso from './pages/Acceso'
 import MisCompaneros from './pages/MisCompaneros'
 import Publicaciones from './pages/Publicaciones'
-import Registrarme from './pages/Registrarme'
+
+const logoCft = `${import.meta.env.BASE_URL}logo_cft.svg`
 
 const linkNav = ({ isActive }) =>
   `rounded-full px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors ${
     isActive
-      ? 'bg-violet-100 text-violet-700'
-      : 'text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900'
+      ? 'bg-cft-durazno/40 text-cft-naranja'
+      : 'text-neutral-600 hover:bg-neutral-100 hover:text-cft-carbon'
   }`
 
+// lee el usuario guardado; si el JSON está corrupto devuelve null
+function usuarioGuardado() {
+  try {
+    return JSON.parse(localStorage.getItem('user'))
+  } catch {
+    return null
+  }
+}
+
 function App() {
+  const [usuario, setUsuario] = useState(usuarioGuardado)
+
+  function entrar(datos) {
+    localStorage.setItem('token', datos.token)
+    localStorage.setItem('user', JSON.stringify(datos.user))
+    setUsuario(datos.user)
+  }
+
+  function salir() {
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+    setUsuario(null)
+  }
+
+  // sin sesión no se puede ver nada de la app: solo la pantalla de acceso
+  if (!usuario || !localStorage.getItem('token')) {
+    return <Acceso alEntrar={entrar} />
+  }
+
   return (
     <HashRouter>
-      <div className="min-h-svh bg-neutral-50 text-neutral-900">
+      <div className="min-h-svh bg-neutral-50 text-cft-carbon">
         <header className="sticky top-0 z-10 border-b border-neutral-200 bg-white/80 backdrop-blur-md">
           <nav className="mx-auto flex h-16 max-w-5xl items-center justify-between gap-4 px-4">
             <NavLink to="/" className="flex shrink-0 items-center gap-2.5">
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-violet-600 via-fuchsia-500 to-amber-400 text-white shadow-md shadow-violet-500/25">
-                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.26 10.147a60.438 60.438 0 0 0-.491 6.347A48.62 48.62 0 0 1 12 20.904a48.62 48.62 0 0 1 8.232-4.41 60.46 60.46 0 0 0-.491-6.347m-15.482 0a50.636 50.636 0 0 0-2.658-.813A59.906 59.906 0 0 1 12 3.493a59.903 59.903 0 0 1 10.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.717 50.717 0 0 1 12 13.489a50.702 50.702 0 0 1 7.74-3.342M6.75 15a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm0 0v-3.675A55.378 55.378 0 0 1 12 8.443m-7.007 11.55A5.981 5.981 0 0 0 6.75 15.75v-1.5" />
-                </svg>
-              </span>
+              <img src={logoCft} alt="Logo CFT" className="h-8 w-auto" />
               <span className="text-lg font-bold tracking-tight">MiCompañero</span>
             </NavLink>
             <div className="flex items-center gap-1 overflow-x-auto">
               <NavLink to="/" className={linkNav} end>
-                Inicio
+                Mural CFT
               </NavLink>
               <NavLink to="/mis-companeros" className={linkNav}>
                 Mis compañeros
               </NavLink>
-              <NavLink to="/publicaciones" className={linkNav}>
-                Publicaciones
-              </NavLink>
-              <NavLink to="/registrarme" className={linkNav}>
-                Registrarme
-              </NavLink>
+            </div>
+            <div className="flex shrink-0 items-center gap-3">
+              <span className="hidden items-center gap-2 sm:flex">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-cft-naranja to-cft-coral text-xs font-bold text-white">
+                  {usuario.name?.[0]?.toUpperCase() || 'U'}
+                </span>
+                <span className="max-w-32 truncate text-sm font-medium text-cft-carbon">
+                  {usuario.name} {usuario.lastName}
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={salir}
+                className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-600 transition-colors hover:bg-neutral-100 hover:text-cft-carbon"
+              >
+                Salir
+              </button>
             </div>
           </nav>
         </header>
 
         <main className="mx-auto max-w-5xl px-4 py-10">
           <Routes>
-            <Route path="/" element={<Inicio />} />
+            <Route
+              path="/"
+              element={
+                <Publicaciones usuario={usuario} alExpirarSesion={salir} />
+              }
+            />
             <Route path="/mis-companeros" element={<MisCompaneros />} />
-            <Route path="/publicaciones" element={<Publicaciones />} />
-            <Route path="/registrarme" element={<Registrarme />} />
+            <Route
+              path="/publicaciones"
+              element={<Navigate to="/" replace />}
+            />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

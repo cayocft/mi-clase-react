@@ -3,11 +3,11 @@ import { Link } from 'react-router-dom'
 import { obtenerUsuarios } from '../services/usuario'
 
 const AVATAR_GRADIENTS = [
-  'from-violet-600 to-fuchsia-500',
-  'from-sky-500 to-indigo-600',
-  'from-amber-400 to-rose-500',
-  'from-emerald-500 to-teal-600',
-  'from-pink-500 to-purple-600',
+  'from-cft-naranja to-cft-coral',
+  'from-cft-coral to-cft-durazno',
+  'from-cft-carbon to-neutral-500',
+  'from-cft-durazno to-cft-naranja',
+  'from-cft-naranja to-cft-carbon',
 ]
 
 function iniciales(usuario) {
@@ -30,14 +30,14 @@ function TarjetaCompanero({ usuario, indice }) {
 
   return (
     <article className="flex flex-col items-center rounded-2xl border border-neutral-200 bg-white p-6 text-center shadow-sm transition-shadow hover:shadow-md">
-      <div className="rounded-full bg-gradient-to-tr from-amber-400 via-pink-500 to-violet-600 p-[3px]">
+      <div className="rounded-full bg-gradient-to-tr from-cft-durazno via-cft-coral to-cft-naranja p-[3px]">
         <div
           className={`flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br ${gradiente} text-2xl font-bold text-white ring-4 ring-white`}
         >
           {iniciales(usuario)}
         </div>
       </div>
-      <h2 className="mt-4 text-base font-semibold text-neutral-900">
+      <h2 className="mt-4 text-base font-semibold text-cft-carbon">
         {usuario.name} {usuario.lastName}
       </h2>
       <p className="mt-1 w-full truncate text-sm text-neutral-500">{usuario.email}</p>
@@ -76,7 +76,7 @@ function MisCompaneros() {
     <div className="space-y-8">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-neutral-900">
+          <h1 className="text-3xl font-bold tracking-tight text-cft-carbon">
             Mis compañeros
           </h1>
           <p className="mt-1 text-sm text-neutral-500">
@@ -97,7 +97,7 @@ function MisCompaneros() {
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
             placeholder="Buscar por nombre, email o RUT…"
-            className="w-full rounded-full border border-neutral-300 bg-white py-2.5 pr-4 pl-10 text-sm text-neutral-900 placeholder-neutral-400 transition-colors outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20"
+            className="w-full rounded-full border border-neutral-300 bg-white py-2.5 pr-4 pl-10 text-sm text-cft-carbon placeholder-neutral-400 transition-colors outline-none focus:border-cft-naranja focus:ring-2 focus:ring-cft-naranja/20"
           />
         </div>
       </header>
@@ -140,10 +140,10 @@ function MisCompaneros() {
           </p>
           {!busqueda && (
             <Link
-              to="/registrarme"
-              className="mt-4 inline-block rounded-full bg-violet-600 px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-violet-700"
+              to="/"
+              className="mt-4 inline-block rounded-full bg-cft-naranja px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-cft-coral"
             >
-              Sé el primero en registrarte
+              Explorar publicaciones
             </Link>
           )}
         </div>

@@ -1,17 +1,50 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { crearComentario, obtenerComentarios } from '../services/comentario'
 import { crearPublicacion, obtenerPublicaciones } from '../services/publicacion'
+import {
+  crearReaccion,
+  obtenerReacciones,
+  quitarReaccion,
+} from '../services/reaccion'
 
+const TIPOS_REACCION = [
+  { tipo: 'like', emoji: '👍', nombre: 'Me gusta' },
+  { tipo: 'love', emoji: '❤️', nombre: 'Me encanta' },
+  { tipo: 'haha', emoji: '😂', nombre: 'Me divierte' },
+  { tipo: 'wow', emoji: '😮', nombre: 'Me sorprende' },
+  { tipo: 'sad', emoji: '😢', nombre: 'Me entristece' },
+  { tipo: 'angry', emoji: '😡', nombre: 'Me enoja' },
+]
+
+// muestra la fecha como en Facebook: "hace 5 minutos", "hace 2 horas"...
+// y a partir de un día, la fecha con hora de publicación
 function fechaPublicacion(createdAt) {
   if (!createdAt) return 'Fecha desconocida'
 
   const fecha = new Date(createdAt)
   if (Number.isNaN(fecha.getTime())) return 'Fecha desconocida'
 
+  const segundos = Math.floor((Date.now() - fecha.getTime()) / 1000)
+
+  if (segundos < 60) return 'hace un momento'
+
+  const minutos = Math.floor(segundos / 60)
+  if (minutos < 60) {
+    return `hace ${minutos} ${minutos === 1 ? 'minuto' : 'minutos'}`
+  }
+
+  const horas = Math.floor(minutos / 60)
+  if (horas < 24) {
+    return `hace ${horas} ${horas === 1 ? 'hora' : 'horas'}`
+  }
+
+  // más de un día → "18 de noviembre de 2026, 21:15"
   return new Intl.DateTimeFormat('es-CL', {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
   }).format(fecha)
 }
 
@@ -19,7 +52,27 @@ function inicialAutor(nombre) {
   return nombre?.trim()?.[0]?.toUpperCase() || 'U'
 }
 
-function Publicaciones() {
+// pide las reacciones de cada post para saber cuál puso el usuario
+// logueado (miReaccion) y actualizar los conteos por tipo
+async function conMisReacciones(posts, usuarioId) {
+  return Promise.all(
+    posts.map(async (p) => {
+      try {
+        const datos = await obtenerReacciones(p.id)
+        const mia = datos.reactions.find((r) => r.user?.id === usuarioId)
+        return {
+          ...p,
+          reactions: datos.counts,
+          miReaccion: mia ? { id: mia.id, type: mia.type } : null,
+        }
+      } catch {
+        return { ...p, miReaccion: null }
+      }
+    }),
+  )
+}
+
+function Publicaciones({ usuario, alExpirarSesion }) {
   const [publicaciones, setPublicaciones] = useState([])
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
@@ -27,60 +80,40 @@ function Publicaciones() {
   const [modalAbierto, setModalAbierto] = useState(false)
   const [titulo, setTitulo] = useState('')
   const [contenido, setContenido] = useState('')
-  const [token, setToken] = useState(() => localStorage.getItem('token') || '')
   const [publicando, setPublicando] = useState(false)
   const [errorCreacion, setErrorCreacion] = useState('')
   const [contenidosComentario, setContenidosComentario] = useState({})
-  const [usuariosComentario, setUsuariosComentario] = useState({})
   const [comentariosEnviando, setComentariosEnviando] = useState({})
   const [erroresComentario, setErroresComentario] = useState({})
   const [mensajesComentario, setMensajesComentario] = useState({})
   const [erroresCargaComentarios, setErroresCargaComentarios] = useState({})
-  const [comentariosRecargando, setComentariosRecargando] = useState({})
+  const [comentariosCargando, setComentariosCargando] = useState({})
+  // cuántos comentarios se ven por post: parte en 3 y sube de 3 en 3
+  const [comentariosVisibles, setComentariosVisibles] = useState({})
+  const [reaccionesEnviando, setReaccionesEnviando] = useState({})
+  const [erroresReaccion, setErroresReaccion] = useState({})
+  // paginación del feed: nextCursor = id del último post recibido (null = no hay más)
+  const [nextCursor, setNextCursor] = useState(null)
+  const [cargandoMas, setCargandoMas] = useState(false)
+  const [errorCargarMas, setErrorCargarMas] = useState('')
+  const sentinelRef = useRef(null)
+  // tick que fuerza re-render cada 60s para mantener al día
+  // los textos "hace X minutos/horas" de posts y comentarios
+  const [, setTick] = useState(0)
 
+  // carga inicial: trae la primera página del feed.
+  // cada post ya incluye una vista previa de comentarios y commentsCount,
+  // así que no hace falta pedir los comentarios uno por uno
   useEffect(() => {
     let activa = true
 
     async function cargarPublicaciones() {
       try {
         const datos = await obtenerPublicaciones()
-        const resultadosComentarios = await Promise.all(
-          datos.map(async (publicacion) => {
-            try {
-              return {
-                postId: publicacion.id,
-                comentarios: await obtenerComentarios(publicacion.id),
-              }
-            } catch (e) {
-              return { postId: publicacion.id, error: e.message }
-            }
-          }),
-        )
-
+        const postsConReaccion = await conMisReacciones(datos.posts, usuario?.id)
         if (!activa) return
-
-        const comentariosPorPost = Object.fromEntries(
-          resultadosComentarios.map(({ postId, comentarios }) => [
-            postId,
-            comentarios || [],
-          ]),
-        )
-        setErroresCargaComentarios(
-          Object.fromEntries(
-            resultadosComentarios
-              .filter((resultado) => resultado.error)
-              .map(({ postId, error: errorComentarios }) => [
-                postId,
-                errorComentarios,
-              ]),
-          ),
-        )
-        setPublicaciones(
-          datos.map((publicacion) => ({
-            ...publicacion,
-            comments: comentariosPorPost[publicacion.id] || [],
-          })),
-        )
+        setPublicaciones(postsConReaccion)
+        setNextCursor(datos.nextCursor)
       } catch (e) {
         if (activa) setError(e.message)
       } finally {
@@ -93,35 +126,197 @@ function Publicaciones() {
     return () => {
       activa = false
     }
-  }, [intento])
+  }, [intento, usuario?.id])
+
+  // cada 60 segundos actualiza el tick → re-render → se recalculan
+  // los "hace X minutos" (la unidad mínima que mostramos es el minuto)
+  useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), 60_000)
+    return () => clearInterval(timer)
+  }, [])
+
+  // scroll infinito: cuando el div sentinel entra en pantalla, pedir la
+  // siguiente página de posts (como hace Facebook al llegar al fondo)
+  useEffect(() => {
+    const nodo = sentinelRef.current
+    if (!nodo) return
+
+    const observador = new IntersectionObserver((entradas) => {
+      if (entradas[0].isIntersecting) cargarMasPublicaciones()
+    })
+    observador.observe(nodo)
+
+    return () => observador.disconnect()
+  })
 
   function reintentar() {
     setCargando(true)
     setError('')
+    setErrorCargarMas('')
+    setNextCursor(null)
     setIntento((actual) => actual + 1)
   }
 
-  async function recargarComentarios(postId) {
-    if (comentariosRecargando[postId]) return
+  // pide la página siguiente del feed y la AGREGA al final de la lista
+  async function cargarMasPublicaciones() {
+    if (!nextCursor || cargandoMas) return
 
-    setComentariosRecargando((actuales) => ({ ...actuales, [postId]: true }))
+    setCargandoMas(true)
+    setErrorCargarMas('')
+
+    try {
+      const datos = await obtenerPublicaciones(nextCursor)
+      const postsNuevos = await conMisReacciones(datos.posts, usuario?.id)
+      setPublicaciones((actuales) => [...actuales, ...postsNuevos])
+      setNextCursor(datos.nextCursor)
+    } catch (e) {
+      // cursor inválido o de un post eliminado → reiniciar desde la página 1
+      if (e.status === 400 || e.status === 404) {
+        reintentar()
+      } else {
+        setErrorCargarMas(e.message)
+      }
+    } finally {
+      setCargandoMas(false)
+    }
+  }
+
+  // "Ver más comentarios": pide la siguiente página de comentarios de un post
+  // y la AGREGA a los que ya se muestran (vienen del más reciente al más antiguo)
+  async function cargarMasComentarios(postId) {
+    if (comentariosCargando[postId]) return
+
+    const publicacion = publicaciones.find((p) => p.id === postId)
+    const comentariosActuales = publicacion?.comments || []
+    // el cursor es el que devolvió la API, o el id del último comentario visible
+    const cursor =
+      publicacion?.commentsCursor ?? comentariosActuales.at(-1)?.id
+
+    setComentariosCargando((actuales) => ({ ...actuales, [postId]: true }))
     setErroresCargaComentarios((actuales) => ({ ...actuales, [postId]: '' }))
 
     try {
-      const comentarios = await obtenerComentarios(postId)
+      const datos = await obtenerComentarios(postId, cursor)
       setPublicaciones((actuales) =>
-        actuales.map((publicacion) =>
-          publicacion.id === postId ? { ...publicacion, comments: comentarios } : publicacion,
+        actuales.map((p) =>
+          p.id === postId
+            ? {
+                ...p,
+                comments: [...(p.comments || []), ...datos.comments],
+                commentsCursor: datos.nextCursor,
+              }
+            : p,
         ),
       )
     } catch (e) {
-      setErroresCargaComentarios((actuales) => ({
-        ...actuales,
-        [postId]: e.message,
-      }))
+      // cursor inválido → recargar los comentarios desde el principio
+      if (e.status === 400 || e.status === 404) {
+        try {
+          const datos = await obtenerComentarios(postId)
+          setPublicaciones((actuales) =>
+            actuales.map((p) =>
+              p.id === postId
+                ? { ...p, comments: datos.comments, commentsCursor: datos.nextCursor }
+                : p,
+            ),
+          )
+        } catch (e2) {
+          setErroresCargaComentarios((actuales) => ({
+            ...actuales,
+            [postId]: e2.message,
+          }))
+        }
+      } else {
+        setErroresCargaComentarios((actuales) => ({
+          ...actuales,
+          [postId]: e.message,
+        }))
+      }
     } finally {
-      setComentariosRecargando((actuales) => ({ ...actuales, [postId]: false }))
+      setComentariosCargando((actuales) => ({ ...actuales, [postId]: false }))
     }
+  }
+
+  // clic en un emoji: mismo tipo → la quita; otro tipo → cambia;
+  // sin reacción → la crea (como en Facebook)
+  async function reaccionar(postId, tipo) {
+    if (reaccionesEnviando[postId]) return
+
+    const publicacion = publicaciones.find((p) => p.id === postId)
+    const anterior = publicacion?.miReaccion
+
+    setReaccionesEnviando((actuales) => ({ ...actuales, [postId]: true }))
+    setErroresReaccion((actuales) => ({ ...actuales, [postId]: '' }))
+
+    try {
+      // si ya tenía una reacción hay que quitarla antes (toggle o cambio)
+      if (anterior) await quitarReaccion(anterior.id)
+
+      if (anterior?.type === tipo) {
+        // mismo emoji otra vez → se quita la reacción
+        setPublicaciones((actuales) =>
+          actuales.map((p) =>
+            p.id === postId
+              ? {
+                  ...p,
+                  miReaccion: null,
+                  reactions: {
+                    ...p.reactions,
+                    [tipo]: Math.max(0, (p.reactions?.[tipo] ?? 1) - 1),
+                  },
+                }
+              : p,
+          ),
+        )
+      } else {
+        // sin reacción o cambio de tipo → crear (counts viene actualizado)
+        const datos = await crearReaccion(postId, tipo)
+        setPublicaciones((actuales) =>
+          actuales.map((p) =>
+            p.id === postId
+              ? {
+                  ...p,
+                  miReaccion: { id: datos.reaction.id, type: tipo },
+                  reactions: datos.counts,
+                }
+              : p,
+          ),
+        )
+      }
+    } catch (e) {
+      if (e.status === 401) {
+        alExpirarSesion?.()
+        return
+      }
+      setErroresReaccion((actuales) => ({ ...actuales, [postId]: e.message }))
+    } finally {
+      setReaccionesEnviando((actuales) => ({ ...actuales, [postId]: false }))
+    }
+  }
+
+  // botón "Ver más comentarios": revela 3 comentarios más por clic.
+  // si los comentarios aún no están descargados (el feed no los trae)
+  // o falta página por ver, primero pide a la API
+  async function verMasComentarios(postId) {
+    if (comentariosCargando[postId]) return
+
+    const publicacion = publicaciones.find((p) => p.id === postId)
+    const cargados = publicacion?.comments?.length || 0
+    const total = publicacion?.commentsCount ?? cargados
+    const visibles = comentariosVisibles[postId] ?? 3
+
+    if (
+      visibles + 3 > cargados &&
+      cargados < total &&
+      publicacion?.commentsCursor !== null
+    ) {
+      await cargarMasComentarios(postId)
+    }
+
+    setComentariosVisibles((actuales) => ({
+      ...actuales,
+      [postId]: visibles + 3,
+    }))
   }
 
   function abrirModal() {
@@ -138,10 +333,9 @@ function Publicaciones() {
 
     const tituloLimpio = titulo.trim()
     const contenidoLimpio = contenido.trim()
-    const tokenLimpio = token.trim()
 
-    if (!tituloLimpio || !contenidoLimpio || !tokenLimpio) {
-      setErrorCreacion('Completa el título, el contenido y el token.')
+    if (!tituloLimpio || !contenidoLimpio) {
+      setErrorCreacion('Completa el título y el contenido.')
       return
     }
 
@@ -149,17 +343,22 @@ function Publicaciones() {
     setErrorCreacion('')
 
     try {
-      localStorage.setItem('token', tokenLimpio)
-      const nuevaPublicacion = await crearPublicacion({
+      await crearPublicacion({
         title: tituloLimpio,
         content: contenidoLimpio,
       })
 
-      setPublicaciones((actuales) => [nuevaPublicacion, ...actuales])
       setTitulo('')
       setContenido('')
       setModalAbierto(false)
+      // reinicia el feed desde la página 1 para que el post nuevo salga arriba
+      reintentar()
     } catch (e) {
+      // 401 = el token expiró: se cierra la sesión y vuelve a la pantalla de acceso
+      if (e.status === 401) {
+        alExpirarSesion?.()
+        return
+      }
       setErrorCreacion(e.message)
     } finally {
       setPublicando(false)
@@ -171,7 +370,6 @@ function Publicaciones() {
     if (comentariosEnviando[postId]) return
 
     const content = (contenidosComentario[postId] || '').trim()
-    const userId = (usuariosComentario[postId] || '').trim()
 
     if (!content || content.length > 500) {
       setErroresComentario((actuales) => ({
@@ -188,7 +386,7 @@ function Publicaciones() {
     try {
       const comentarioCreado = await crearComentario(postId, {
         content,
-        ...(userId ? { userId } : {}),
+        userId: usuario?.id,
       })
 
       setPublicaciones((actuales) =>
@@ -197,7 +395,7 @@ function Publicaciones() {
             ? {
                 ...publicacion,
                 commentsCount: (publicacion.commentsCount ?? 0) + 1,
-                comments: [...(publicacion.comments || []), comentarioCreado],
+                comments: [comentarioCreado, ...(publicacion.comments || [])],
               }
             : publicacion,
         ),
@@ -218,42 +416,36 @@ function Publicaciones() {
     <div className="mx-auto max-w-3xl space-y-6">
       <header className="flex flex-col gap-3 border-b border-neutral-200 pb-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-sm font-semibold tracking-wide text-violet-600 uppercase">
+          <p className="text-sm font-semibold tracking-wide text-cft-naranja uppercase">
             Comunidad de la clase
           </p>
-          <h1 className="mt-1 text-3xl font-bold tracking-tight text-neutral-900">
-            Publicaciones
+          <h1 className="mt-1 text-3xl font-bold tracking-tight text-cft-carbon">
+            Mural CFT
           </h1>
           <p className="mt-1 text-sm text-neutral-500">
             Ideas, preguntas y recursos compartidos por tus compañeros.
           </p>
         </div>
-        <div className="flex flex-col items-start gap-2 sm:items-end">
-          <button
-            type="button"
-            onClick={abrirModal}
-            className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-500 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-violet-500/20 transition-transform hover:scale-[1.03] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-600"
-          >
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={2}
-              stroke="currentColor"
-              aria-hidden="true"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 5v14m-7-7h14" />
-            </svg>
-            Publicar
-          </button>
-          {!cargando && !error && (
-            <span className="inline-flex w-fit items-center rounded-full bg-violet-50 px-3 py-1 text-sm font-medium text-violet-700">
-              {publicaciones.length}{' '}
-              {publicaciones.length === 1 ? 'publicación' : 'publicaciones'}
-            </span>
-          )}
-        </div>
+        {!cargando && !error && (
+          <span className="inline-flex w-fit items-center self-start rounded-full bg-cft-durazno/20 px-3 py-1 text-sm font-medium text-cft-naranja sm:self-end">
+            {publicaciones.length}{' '}
+            {publicaciones.length === 1 ? 'publicación' : 'publicaciones'}
+          </span>
+        )}
       </header>
+
+      <button
+        type="button"
+        onClick={abrirModal}
+        className="flex w-full items-center gap-3 rounded-2xl border border-neutral-200 bg-white p-4 text-left shadow-sm"
+      >
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-cft-naranja to-cft-coral text-sm font-bold text-white">
+          {inicialAutor(usuario?.name)}
+        </span>
+        <span className="min-w-0 flex-1 truncate rounded-full bg-neutral-100 px-4 py-2.5 text-sm text-neutral-500 transition-colors hover:bg-neutral-200">
+          Escribe que piensas o lo que necesitas. Busca apoyo.
+        </span>
+      </button>
 
       {cargando && (
         <div className="space-y-4" aria-label="Cargando publicaciones">
@@ -298,7 +490,7 @@ function Publicaciones() {
 
       {!cargando && !error && publicaciones.length === 0 && (
         <div className="rounded-2xl border border-dashed border-neutral-300 bg-white px-6 py-12 text-center">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-violet-50 text-violet-600">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-cft-durazno/20 text-cft-naranja">
             <svg
               className="h-6 w-6"
               fill="none"
@@ -314,7 +506,7 @@ function Publicaciones() {
               />
             </svg>
           </div>
-          <p className="mt-4 font-semibold text-neutral-800">
+          <p className="mt-4 font-semibold text-cft-carbon">
             Aún no hay publicaciones
           </p>
           <p className="mt-1 text-sm text-neutral-500">
@@ -328,9 +520,10 @@ function Publicaciones() {
           {publicaciones.map((publicacion) => {
             const autor = publicacion.author?.name || 'Usuario'
             const comentarios = publicacion.comments || []
-            const reacciones =
-              (publicacion.reactions?.like ?? 0) +
-              (publicacion.reactions?.love ?? 0)
+            // cuántos comentarios se ven ahora y cuántos hay en total
+            const visiblesComentarios = comentariosVisibles[publicacion.id] ?? 3
+            const totalComentarios =
+              publicacion.commentsCount ?? comentarios.length
 
             return (
               <article
@@ -338,11 +531,11 @@ function Publicaciones() {
                 className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md sm:p-6"
               >
                 <div className="flex items-center gap-3">
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-500 text-base font-semibold text-white">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-cft-naranja to-cft-coral text-base font-semibold text-white">
                     {inicialAutor(autor)}
                   </div>
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-neutral-900">
+                    <p className="truncate text-sm font-semibold text-cft-carbon">
                       {autor}
                     </p>
                     <time
@@ -355,7 +548,7 @@ function Publicaciones() {
                 </div>
 
                 <div className="mt-5">
-                  <h2 className="text-lg font-semibold leading-snug text-neutral-900">
+                  <h2 className="text-lg font-semibold leading-snug text-cft-carbon">
                     {publicacion.title}
                   </h2>
                   <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-neutral-600">
@@ -363,24 +556,35 @@ function Publicaciones() {
                   </p>
                 </div>
 
-                <footer className="mt-5 flex items-center gap-5 border-t border-neutral-100 pt-4 text-sm text-neutral-500">
-                  <span className="inline-flex items-center gap-1.5">
-                    <svg
-                      className="h-4 w-4 text-violet-500"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      strokeWidth={1.8}
-                      stroke="currentColor"
-                      aria-hidden="true"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M6.633 10.25c.806 0 1.533-.446 1.992-1.11l.69-1.001a4.5 4.5 0 0 1 3.704-1.945h.357c.715 0 1.298.583 1.298 1.298 0 .11-.014.219-.041.325l-.557 2.183h3.962a1.75 1.75 0 0 1 1.69 2.206l-1.5 5.5a1.75 1.75 0 0 1-1.69 1.289H9.25a2.25 2.25 0 0 1-2.25-2.25v-6.495ZM4.5 10.25h2.25v8.75H4.5a1.5 1.5 0 0 1-1.5-1.5v-5.75a1.5 1.5 0 0 1 1.5-1.5Z"
-                      />
-                    </svg>
-                    {reacciones}
-                  </span>
+                <footer className="mt-5 flex items-center justify-between gap-3 border-t border-neutral-100 pt-3 text-sm text-neutral-500">
+                  <div
+                    className="flex flex-wrap items-center gap-1"
+                    role="group"
+                    aria-label="Reacciones"
+                  >
+                    {TIPOS_REACCION.map(({ tipo, emoji, nombre }) => (
+                      <button
+                        key={tipo}
+                        type="button"
+                        onClick={() => reaccionar(publicacion.id, tipo)}
+                        disabled={reaccionesEnviando[publicacion.id]}
+                        title={nombre}
+                        aria-pressed={publicacion.miReaccion?.type === tipo}
+                        className={`flex items-center gap-1 rounded-full px-2 py-1.5 transition-all hover:scale-110 hover:bg-cft-durazno/30 disabled:cursor-wait disabled:opacity-60 ${
+                          publicacion.miReaccion?.type === tipo
+                            ? 'bg-cft-durazno/40 ring-1 ring-cft-naranja'
+                            : ''
+                        }`}
+                      >
+                        <span className="text-base leading-none">{emoji}</span>
+                        {(publicacion.reactions?.[tipo] ?? 0) > 0 && (
+                          <span className="text-xs font-medium text-neutral-600">
+                            {publicacion.reactions[tipo]}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
                   <span className="inline-flex items-center gap-1.5">
                     <svg
                       className="h-4 w-4"
@@ -399,6 +603,11 @@ function Publicaciones() {
                     {publicacion.commentsCount ?? 0}
                   </span>
                 </footer>
+                {erroresReaccion[publicacion.id] && (
+                  <p role="alert" className="mt-2 text-sm text-red-600">
+                    {erroresReaccion[publicacion.id]}
+                  </p>
+                )}
 
                 <form
                   onSubmit={(e) => enviarComentario(e, publicacion.id)}
@@ -425,40 +634,18 @@ function Publicaciones() {
                       maxLength={500}
                       required
                       disabled={comentariosEnviando[publicacion.id]}
-                      className="min-w-0 flex-1 rounded-full border border-neutral-200 bg-neutral-50 px-4 py-2.5 text-sm text-neutral-900 outline-none transition-colors placeholder:text-neutral-400 focus:border-violet-500 focus:bg-white focus:ring-2 focus:ring-violet-500/20 disabled:opacity-60"
+                      className="min-w-0 flex-1 rounded-full border border-neutral-200 bg-neutral-50 px-4 py-2.5 text-sm text-cft-carbon outline-none transition-colors placeholder:text-neutral-400 focus:border-cft-naranja focus:bg-white focus:ring-2 focus:ring-cft-naranja/20 disabled:opacity-60"
                     />
                     <button
                       type="submit"
                       disabled={comentariosEnviando[publicacion.id]}
-                      className="shrink-0 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
+                      className="shrink-0 rounded-full bg-gradient-to-r from-cft-naranja to-cft-coral px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
                     >
                       {comentariosEnviando[publicacion.id] ? 'Enviando…' : 'Enviar'}
                     </button>
                   </div>
-                  <label
-                    htmlFor={`comentario-usuario-${publicacion.id}`}
-                    className="sr-only"
-                  >
-                    ID de usuario opcional para pruebas
-                  </label>
-                  <input
-                    id={`comentario-usuario-${publicacion.id}`}
-                    type="text"
-                    value={usuariosComentario[publicacion.id] || ''}
-                    onChange={(e) =>
-                      setUsuariosComentario((actuales) => ({
-                        ...actuales,
-                        [publicacion.id]: e.target.value,
-                      }))
-                    }
-                    placeholder="ID de usuario (opcional, para pruebas)"
-                    autoComplete="off"
-                    spellCheck="false"
-                    disabled={comentariosEnviando[publicacion.id]}
-                    className="mt-2 w-full rounded-xl border border-neutral-200 bg-white px-3.5 py-2 text-xs text-neutral-700 outline-none transition-colors placeholder:text-neutral-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 disabled:opacity-60"
-                  />
                   <p className="mt-1.5 text-xs text-neutral-400">
-                    Presiona Enter para comentar. Sin ID, el comentario será anónimo.
+                    Presiona Enter para comentar.
                   </p>
                   {erroresComentario[publicacion.id] && (
                     <p
@@ -487,37 +674,13 @@ function Publicaciones() {
                   className="mt-4 border-t border-neutral-100 pt-4"
                   aria-label={`Comentarios de ${publicacion.title}`}
                 >
-                  <h3 className="mb-3 text-sm font-semibold text-neutral-700">
-                    Comentarios ({comentarios.length})
-                  </h3>
-                  {erroresCargaComentarios[publicacion.id] ? (
-                    <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">
-                      <p role="alert">
-                        No se pudieron cargar los comentarios:{' '}
-                        {erroresCargaComentarios[publicacion.id]}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => recargarComentarios(publicacion.id)}
-                        disabled={comentariosRecargando[publicacion.id]}
-                        className="mt-2 font-semibold underline disabled:cursor-wait disabled:opacity-60"
-                      >
-                        {comentariosRecargando[publicacion.id]
-                          ? 'Cargando…'
-                          : 'Reintentar'}
-                      </button>
-                    </div>
-                  ) : comentariosRecargando[publicacion.id] ? (
-                    <p role="status" className="text-sm text-neutral-500">
-                      Cargando comentarios…
-                    </p>
-                  ) : comentarios.length === 0 ? (
+                  {comentarios.length === 0 && totalComentarios === 0 ? (
                     <p className="text-sm text-neutral-500">
                       Aún no hay comentarios.
                     </p>
                   ) : (
                     <ul className="space-y-3">
-                      {comentarios.map((comentario) => {
+                      {comentarios.slice(0, visiblesComentarios).map((comentario) => {
                         const nombreComentario =
                           comentario.author?.name || 'Anónimo'
 
@@ -526,12 +689,12 @@ function Publicaciones() {
                             key={comentario.id}
                             className="flex items-start gap-2.5"
                           >
-                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xs font-semibold text-violet-700">
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-cft-durazno/30 text-xs font-semibold text-cft-naranja">
                               {inicialAutor(nombreComentario)}
                             </div>
                             <div className="min-w-0 flex-1">
                               <div className="inline-block max-w-full rounded-2xl bg-neutral-100 px-4 py-2.5">
-                                <p className="text-xs font-semibold text-neutral-800">
+                                <p className="text-xs font-semibold text-cft-carbon">
                                   {nombreComentario}
                                 </p>
                                 <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-5 text-neutral-700">
@@ -550,11 +713,60 @@ function Publicaciones() {
                       })}
                     </ul>
                   )}
+                  {/* se muestra si faltan comentarios por ver o por descargar
+                      (el feed no trae los comments: el primer clic los pide) */}
+                  {(visiblesComentarios < totalComentarios ||
+                    comentarios.length < totalComentarios) && (
+                    <button
+                      type="button"
+                      onClick={() => verMasComentarios(publicacion.id)}
+                      disabled={comentariosCargando[publicacion.id]}
+                      className="mt-3 text-sm font-semibold text-cft-naranja transition-colors hover:text-cft-coral disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {comentariosCargando[publicacion.id]
+                        ? 'Cargando…'
+                        : comentarios.length === 0
+                          ? `Ver comentarios (${totalComentarios})`
+                          : `Ver más comentarios (${totalComentarios - Math.min(visiblesComentarios, comentarios.length)})`}
+                    </button>
+                  )}
+                  {erroresCargaComentarios[publicacion.id] && (
+                    <p role="alert" className="mt-2 text-sm text-red-600">
+                      {erroresCargaComentarios[publicacion.id]}
+                    </p>
+                  )}
                 </section>
               </article>
             )
           })}
         </section>
+      )}
+
+      {!cargando && !error && publicaciones.length > 0 && (
+        <div ref={sentinelRef} className="py-4 text-center text-sm">
+          {cargandoMas && (
+            <p role="status" className="text-neutral-500">
+              Cargando más publicaciones…
+            </p>
+          )}
+          {errorCargarMas && (
+            <p role="alert" className="text-red-600">
+              {errorCargarMas}{' '}
+              <button
+                type="button"
+                onClick={cargarMasPublicaciones}
+                className="font-semibold underline"
+              >
+                Reintentar
+              </button>
+            </p>
+          )}
+          {!nextCursor && !cargandoMas && !errorCargarMas && (
+            <p className="text-neutral-400">
+              Ya viste todas las publicaciones
+            </p>
+          )}
+        </div>
       )}
 
       {modalAbierto && (
@@ -574,7 +786,7 @@ function Publicaciones() {
               <div>
                 <h2
                   id="modal-publicar-titulo"
-                  className="text-xl font-bold tracking-tight text-neutral-900"
+                  className="text-xl font-bold tracking-tight text-cft-carbon"
                 >
                   Crear publicación
                 </h2>
@@ -587,7 +799,7 @@ function Publicaciones() {
                 onClick={cerrarModal}
                 disabled={publicando}
                 aria-label="Cerrar modal"
-                className="rounded-full p-2 text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-full p-2 text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-cft-carbon disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <svg
                   className="h-5 w-5"
@@ -618,7 +830,7 @@ function Publicaciones() {
                   placeholder="¿Qué quieres compartir?"
                   autoFocus
                   required
-                  className="w-full rounded-xl border border-neutral-300 bg-neutral-50 px-3.5 py-2.5 text-sm text-neutral-900 outline-none transition-colors placeholder:text-neutral-400 focus:border-violet-500 focus:bg-white focus:ring-2 focus:ring-violet-500/20"
+                  className="w-full rounded-xl border border-neutral-300 bg-neutral-50 px-3.5 py-2.5 text-sm text-cft-carbon outline-none transition-colors placeholder:text-neutral-400 focus:border-cft-naranja focus:bg-white focus:ring-2 focus:ring-cft-naranja/20"
                 />
               </div>
 
@@ -636,31 +848,8 @@ function Publicaciones() {
                   placeholder="Escribe aquí tu publicación..."
                   rows={5}
                   required
-                  className="w-full resize-y rounded-xl border border-neutral-300 bg-neutral-50 px-3.5 py-2.5 text-sm leading-6 text-neutral-900 outline-none transition-colors placeholder:text-neutral-400 focus:border-violet-500 focus:bg-white focus:ring-2 focus:ring-violet-500/20"
+                  className="w-full resize-y rounded-xl border border-neutral-300 bg-neutral-50 px-3.5 py-2.5 text-sm leading-6 text-cft-carbon outline-none transition-colors placeholder:text-neutral-400 focus:border-cft-naranja focus:bg-white focus:ring-2 focus:ring-cft-naranja/20"
                 />
-              </div>
-
-              <div>
-                <label
-                  htmlFor="publicacion-token"
-                  className="mb-1.5 block text-sm font-medium text-neutral-700"
-                >
-                  Token
-                </label>
-                <input
-                  id="publicacion-token"
-                  type="text"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  placeholder="Pega tu token de acceso"
-                  autoComplete="off"
-                  spellCheck="false"
-                  required
-                  className="w-full rounded-xl border border-neutral-300 bg-neutral-50 px-3.5 py-2.5 font-mono text-sm text-neutral-900 outline-none transition-colors placeholder:font-sans placeholder:text-neutral-400 focus:border-violet-500 focus:bg-white focus:ring-2 focus:ring-violet-500/20"
-                />
-                <p className="mt-1.5 text-xs text-neutral-500">
-                  Se guardará en este navegador como token y reemplazará el anterior.
-                </p>
               </div>
 
               {errorCreacion && (
@@ -684,7 +873,7 @@ function Publicaciones() {
                 <button
                   type="submit"
                   disabled={publicando}
-                  className="rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-500 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-violet-500/20 transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
+                  className="rounded-full bg-gradient-to-r from-cft-naranja to-cft-coral px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-cft-naranja/20 transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
                 >
                   {publicando ? 'Publicando…' : 'Publicar'}
                 </button>

@@ -1,15 +1,21 @@
 const API_URL = import.meta.env.VITE_API_URL
 
-// GET /posts/:postId/comments → devuelve los comentarios de una publicación
-export async function obtenerComentarios(postId) {
-  const respuesta = await fetch(`${API_URL}/posts/${postId}/comments`)
+// GET /posts/:postId/comments?limit=3&cursor=... → devuelve { comments, nextCursor }
+// cursor = id del último comentario cargado; sin cursor trae la primera página
+export async function obtenerComentarios(postId, cursor) {
+  let url = `${API_URL}/posts/${postId}/comments?limit=3`
+  if (cursor) url += `&cursor=${cursor}`
+
+  const respuesta = await fetch(url)
   const datos = await respuesta.json()
 
   if (!respuesta.ok) {
-    throw new Error('No se pudieron obtener los comentarios')
+    const error = new Error(datos.error || 'No se pudieron obtener los comentarios')
+    error.status = respuesta.status
+    throw error
   }
 
-  return datos.comments
+  return datos
 }
 
 // POST /posts/:postId/comments → crea un comentario en una publicación
