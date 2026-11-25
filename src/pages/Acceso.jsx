@@ -64,8 +64,33 @@ function Acceso({ alEntrar }) {
   }
 
   return (
-    <div className="flex min-h-svh items-center justify-center bg-neutral-100 px-4 py-10">
-      <div className="grid w-full max-w-4xl items-center gap-10 lg:grid-cols-2">
+    <div className="relative flex min-h-svh items-center justify-center overflow-hidden bg-neutral-100 px-4 py-10">
+      {/* íconos educativos flotando en el fondo (decorativo) */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 select-none"
+      >
+        <span className="animate-flotar absolute top-[12%] left-[6%] text-4xl opacity-50" style={{ animationDuration: '7s' }}>
+          📚
+        </span>
+        <span className="animate-flotar absolute top-[20%] right-[8%] text-3xl opacity-40" style={{ animationDuration: '5s', animationDelay: '1s' }}>
+          ✏️
+        </span>
+        <span className="animate-flotar absolute bottom-[18%] left-[10%] text-3xl opacity-40" style={{ animationDuration: '8s', animationDelay: '0.5s' }}>
+          🎓
+        </span>
+        <span className="animate-flotar absolute right-[12%] bottom-[14%] text-4xl opacity-50" style={{ animationDuration: '6s', animationDelay: '1.5s' }}>
+          🖍️
+        </span>
+        <span className="animate-flotar absolute top-[55%] left-[3%] hidden text-3xl opacity-30 lg:block" style={{ animationDuration: '9s', animationDelay: '2s' }}>
+          📐
+        </span>
+        <span className="animate-flotar absolute top-[70%] right-[4%] hidden text-3xl opacity-30 lg:block" style={{ animationDuration: '7s', animationDelay: '0.8s' }}>
+          💡
+        </span>
+      </div>
+
+      <div className="relative grid w-full max-w-4xl items-center gap-10 lg:grid-cols-2">
         <header className="text-center lg:text-left">
           <img
             src={logoCft}
@@ -79,6 +104,23 @@ function Acceso({ alEntrar }) {
             La red social educativa de tu CFT: pregunta, comparte apuntes y
             aprende junto a tu clase.
           </p>
+          <div
+            aria-hidden="true"
+            className="mt-8 flex items-center justify-center gap-5 text-3xl lg:justify-start"
+          >
+            {['📖', '✏️', '🎓', '📝', '🧑‍🏫'].map((emoji, i) => (
+              <span
+                key={emoji}
+                className="animate-flotar"
+                style={{
+                  animationDuration: `${5 + i}s`,
+                  animationDelay: `${i * 0.6}s`,
+                }}
+              >
+                {emoji}
+              </span>
+            ))}
+          </div>
         </header>
 
         <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-xl shadow-neutral-900/5 sm:p-8">

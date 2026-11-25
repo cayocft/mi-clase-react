@@ -5,6 +5,18 @@
   --color-cft-coral: #F28255;
   --color-cft-durazno: #F9B9A2;
   --color-cft-carbon: #383838;
+
+  --animate-flotar: flotar 6s ease-in-out infinite;
+
+  @keyframes flotar {
+    0%,
+    100% {
+      transform: translateY(0) rotate(-4deg);
+    }
+    50% {
+      transform: translateY(-14px) rotate(4deg);
+    }
+  }
 }
 
 body {
