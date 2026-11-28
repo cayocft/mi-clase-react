@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { HashRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom'
 import Acceso from './pages/Acceso'
 import MisCompaneros from './pages/MisCompaneros'
 import Publicaciones from './pages/Publicaciones'
+import { conectarStream, desconectarStream } from './services/stream'
 
 const logoCft = `${import.meta.env.BASE_URL}logo_cft.svg`
 
@@ -24,6 +25,14 @@ function usuarioGuardado() {
 
 function App() {
   const [usuario, setUsuario] = useState(usuarioGuardado)
+
+  // el canal de tiempo real vive mientras haya sesión: se abre al entrar
+  // (o al recargar con sesión guardada) y se cierra al salir
+  useEffect(() => {
+    if (!usuario) return
+    conectarStream()
+    return () => desconectarStream()
+  }, [usuario])
 
   function entrar(datos) {
     localStorage.setItem('token', datos.token)

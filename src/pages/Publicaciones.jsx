@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
+import { usePostStream } from '../hooks/usePostStream'
 import { crearComentario, obtenerComentarios } from '../services/comentario'
 import { crearPublicacion, obtenerPublicaciones } from '../services/publicacion'
 import {
   crearReaccion,
+  crearReaccionComentario,
   obtenerReacciones,
+  obtenerReaccionesComentario,
   quitarReaccion,
+  quitarReaccionComentario,
 } from '../services/reaccion'
 
 const TIPOS_REACCION = [
@@ -72,6 +76,27 @@ async function conMisReacciones(posts, usuarioId) {
   )
 }
 
+// igual que conMisReacciones pero para los comentarios que se van
+// cargando: pide el detalle de reacciones de cada uno para saber
+// cuál tiene activa el usuario logueado
+async function conMisReaccionesComentarios(comentarios, usuarioId) {
+  return Promise.all(
+    comentarios.map(async (c) => {
+      try {
+        const datos = await obtenerReaccionesComentario(c.id)
+        const mia = datos.reactions.find((r) => r.user?.id === usuarioId)
+        return {
+          ...c,
+          reactions: datos.counts,
+          miReaccion: mia ? { id: mia.id, type: mia.type } : null,
+        }
+      } catch {
+        return { ...c, miReaccion: null }
+      }
+    }),
+  )
+}
+
 function Publicaciones({ usuario, alExpirarSesion }) {
   const [publicaciones, setPublicaciones] = useState([])
   const [cargando, setCargando] = useState(true)
@@ -92,6 +117,10 @@ function Publicaciones({ usuario, alExpirarSesion }) {
   const [comentariosVisibles, setComentariosVisibles] = useState({})
   const [reaccionesEnviando, setReaccionesEnviando] = useState({})
   const [erroresReaccion, setErroresReaccion] = useState({})
+  // igual que las de posts pero por comentario (clave = commentId)
+  const [reaccionesComentarioEnviando, setReaccionesComentarioEnviando] =
+    useState({})
+  const [erroresReaccionComentario, setErroresReaccionComentario] = useState({})
   // paginación del feed: nextCursor = id del último post recibido (null = no hay más)
   const [nextCursor, setNextCursor] = useState(null)
   const [cargandoMas, setCargandoMas] = useState(false)
@@ -100,6 +129,11 @@ function Publicaciones({ usuario, alExpirarSesion }) {
   // tick que fuerza re-render cada 60s para mantener al día
   // los textos "hace X minutos/horas" de posts y comentarios
   const [, setTick] = useState(0)
+
+  // canal de tiempo real: cada evento actualiza el feed sin polling.
+  // si el socket se reconecta tras una caída, se recarga la vista
+  // porque pudieron perderse eventos mientras estuvo desconectado
+  usePostStream(aplicarEventoStream, reintentar)
 
   // carga inicial: trae la primera página del feed.
   // cada post ya incluye una vista previa de comentarios y commentsCount,
@@ -157,6 +191,90 @@ function Publicaciones({ usuario, alExpirarSesion }) {
     setIntento((actual) => actual + 1)
   }
 
+  // aplica al estado local los eventos que llegan por el socket.
+  // las reacciones llegan como conteo final agregado (no un evento por
+  // cada una), así que solo se reemplazan los números
+  function aplicarEventoStream(msg) {
+    switch (msg.type) {
+      case 'post:new':
+        // deduplicar por id: si el post lo creé yo, ya entró con el refetch
+        setPublicaciones((actuales) =>
+          actuales.some((p) => p.id === msg.post.id)
+            ? actuales
+            : [{ ...msg.post, miReaccion: null }, ...actuales],
+        )
+        break
+      case 'post:updated':
+        // merge conservando datos locales: miReaccion y los comentarios
+        // ya cargados (msg.post no trae esos campos del cliente)
+        setPublicaciones((actuales) =>
+          actuales.map((p) =>
+            p.id === msg.post.id
+              ? {
+                  ...p,
+                  ...msg.post,
+                  miReaccion: p.miReaccion,
+                  comments: p.comments ?? msg.post.comments,
+                  commentsCursor: p.commentsCursor ?? msg.post.commentsCursor,
+                }
+              : p,
+          ),
+        )
+        break
+      case 'post:deleted':
+        setPublicaciones((actuales) =>
+          actuales.filter((p) => p.id !== msg.postId),
+        )
+        break
+      case 'reaction:changed':
+        setPublicaciones((actuales) =>
+          actuales.map((p) =>
+            p.id === msg.postId ? { ...p, reactions: msg.counts } : p,
+          ),
+        )
+        break
+      case 'comment:new':
+        // si el comentario ya está (lo acabo de publicar yo) no se
+        // duplica ni se vuelve a subir el contador
+        setPublicaciones((actuales) =>
+          actuales.map((p) => {
+            if (p.id !== msg.postId) return p
+            if ((p.comments || []).some((c) => c.id === msg.comment.id)) {
+              return p
+            }
+            return {
+              ...p,
+              commentsCount: (p.commentsCount ?? 0) + 1,
+              comments: p.comments
+                ? [{ ...msg.comment, miReaccion: null }, ...p.comments]
+                : p.comments,
+            }
+          }),
+        )
+        break
+      case 'comment:deleted':
+        setPublicaciones((actuales) =>
+          actuales.map((p) =>
+            p.id === msg.postId
+              ? {
+                  ...p,
+                  commentsCount: Math.max(0, (p.commentsCount ?? 0) - 1),
+                  comments: p.comments?.filter((c) => c.id !== msg.commentId),
+                }
+              : p,
+          ),
+        )
+        break
+      case 'comment-reaction:changed':
+        // el backend envía el conteo final agregado, no un evento por
+        // reacción: solo se reemplazan los números del comentario
+        actualizarComentario(msg.postId, msg.commentId, {
+          reactions: msg.counts,
+        })
+        break
+    }
+  }
+
   // pide la página siguiente del feed y la AGREGA al final de la lista
   async function cargarMasPublicaciones() {
     if (!nextCursor || cargandoMas) return
@@ -197,12 +315,19 @@ function Publicaciones({ usuario, alExpirarSesion }) {
 
     try {
       const datos = await obtenerComentarios(postId, cursor)
+      const comentariosConReaccion = await conMisReaccionesComentarios(
+        datos.comments,
+        usuario?.id,
+      )
       setPublicaciones((actuales) =>
         actuales.map((p) =>
           p.id === postId
             ? {
                 ...p,
-                comments: [...(p.comments || []), ...datos.comments],
+                comments: [
+                  ...(p.comments || []),
+                  ...comentariosConReaccion,
+                ],
                 commentsCursor: datos.nextCursor,
               }
             : p,
@@ -213,10 +338,14 @@ function Publicaciones({ usuario, alExpirarSesion }) {
       if (e.status === 400 || e.status === 404) {
         try {
           const datos = await obtenerComentarios(postId)
+          const comentariosConReaccion = await conMisReaccionesComentarios(
+            datos.comments,
+            usuario?.id,
+          )
           setPublicaciones((actuales) =>
             actuales.map((p) =>
               p.id === postId
-                ? { ...p, comments: datos.comments, commentsCursor: datos.nextCursor }
+                ? { ...p, comments: comentariosConReaccion, commentsCursor: datos.nextCursor }
                 : p,
             ),
           )
@@ -291,6 +420,110 @@ function Publicaciones({ usuario, alExpirarSesion }) {
       setErroresReaccion((actuales) => ({ ...actuales, [postId]: e.message }))
     } finally {
       setReaccionesEnviando((actuales) => ({ ...actuales, [postId]: false }))
+    }
+  }
+
+  // aplica un cambio a un comentario puntual dentro del post que lo contiene
+  function actualizarComentario(postId, comentarioId, cambios) {
+    setPublicaciones((actuales) =>
+      actuales.map((p) =>
+        p.id === postId
+          ? {
+              ...p,
+              comments: p.comments?.map((c) =>
+                c.id === comentarioId
+                  ? typeof cambios === 'function'
+                    ? cambios(c)
+                    : { ...c, ...cambios }
+                  : c,
+              ),
+            }
+          : p,
+      ),
+    )
+  }
+
+  // clic en un emoji de un comentario: mismo tipo → la quita; otro tipo →
+  // cambia; sin reacción → la crea (misma lógica que las reacciones a posts)
+  async function reaccionarComentario(postId, comentarioId, tipo) {
+    if (reaccionesComentarioEnviando[comentarioId]) return
+
+    const publicacion = publicaciones.find((p) => p.id === postId)
+    const comentario = publicacion?.comments?.find(
+      (c) => c.id === comentarioId,
+    )
+    const anterior = comentario?.miReaccion
+
+    setReaccionesComentarioEnviando((actuales) => ({
+      ...actuales,
+      [comentarioId]: true,
+    }))
+    setErroresReaccionComentario((actuales) => ({
+      ...actuales,
+      [comentarioId]: '',
+    }))
+
+    try {
+      // si ya tenía una reacción hay que quitarla antes (toggle o cambio)
+      if (anterior) await quitarReaccionComentario(anterior.id)
+
+      if (anterior?.type === tipo) {
+        // mismo emoji otra vez → se quita la reacción
+        actualizarComentario(postId, comentarioId, (c) => ({
+          ...c,
+          miReaccion: null,
+          reactions: {
+            ...c.reactions,
+            [tipo]: Math.max(0, (c.reactions?.[tipo] ?? 1) - 1),
+          },
+        }))
+      } else {
+        // sin reacción o cambio de tipo → crear (counts viene actualizado)
+        const datos = await crearReaccionComentario(
+          comentarioId,
+          tipo,
+          usuario?.id,
+        )
+        actualizarComentario(postId, comentarioId, {
+          miReaccion: { id: datos.reaction.id, type: tipo },
+          reactions: datos.counts,
+        })
+      }
+    } catch (e) {
+      if (e.status === 401) {
+        alExpirarSesion?.()
+        return
+      }
+      // 409 = ya había una reacción con ese tipo: se resincroniza el
+      // detalle del comentario para recuperar miReaccion y los conteos
+      if (e.status === 409) {
+        try {
+          const datos = await obtenerReaccionesComentario(comentarioId)
+          const mia = datos.reactions.find(
+            (r) => r.user?.id === usuario?.id,
+          )
+          actualizarComentario(postId, comentarioId, {
+            reactions: datos.counts,
+            miReaccion: mia ? { id: mia.id, type: mia.type } : null,
+          })
+        } catch {
+          // si tampoco se pudo leer el detalle, se deja el error abajo
+          setErroresReaccionComentario((actuales) => ({
+            ...actuales,
+            [comentarioId]: e.message,
+          }))
+        }
+      } else {
+        setErroresReaccionComentario((actuales) => ({
+          ...actuales,
+          [comentarioId]: e.message,
+        }))
+      }
+    } finally {
+      setReaccionesComentarioEnviando((actuales) => ({
+        ...actuales,
+        [comentarioId]: false,
+      }))
     }
   }
 
@@ -395,7 +628,10 @@ function Publicaciones({ usuario, alExpirarSesion }) {
             ? {
                 ...publicacion,
                 commentsCount: (publicacion.commentsCount ?? 0) + 1,
-                comments: [comentarioCreado, ...(publicacion.comments || [])],
+                comments: [
+                  { reactions: {}, miReaccion: null, ...comentarioCreado },
+                  ...(publicacion.comments || []),
+                ],
               }
             : publicacion,
         ),
@@ -701,12 +937,70 @@ function Publicaciones({ usuario, alExpirarSesion }) {
                                   {comentario.content}
                                 </p>
                               </div>
-                              <time
-                                className="mt-1 block px-3 text-xs text-neutral-400"
-                                dateTime={comentario.createdAt || undefined}
-                              >
-                                {fechaPublicacion(comentario.createdAt)}
-                              </time>
+                              {/* reacciones del comentario: mismos emojis
+                                  que los posts pero más compactas, bajo la
+                                  burbuja como en Facebook/Instagram */}
+                              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 px-2">
+                                <time
+                                  className="text-xs text-neutral-400"
+                                  dateTime={comentario.createdAt || undefined}
+                                >
+                                  {fechaPublicacion(comentario.createdAt)}
+                                </time>
+                                <div
+                                  className="flex flex-wrap items-center"
+                                  role="group"
+                                  aria-label={`Reacciones al comentario de ${nombreComentario}`}
+                                >
+                                  {TIPOS_REACCION.map(
+                                    ({ tipo, emoji, nombre }) => (
+                                      <button
+                                        key={tipo}
+                                        type="button"
+                                        onClick={() =>
+                                          reaccionarComentario(
+                                            publicacion.id,
+                                            comentario.id,
+                                            tipo,
+                                          )
+                                        }
+                                        disabled={
+                                          reaccionesComentarioEnviando[
+                                            comentario.id
+                                          ]
+                                        }
+                                        title={nombre}
+                                        aria-pressed={
+                                          comentario.miReaccion?.type === tipo
+                                        }
+                                        className={`flex items-center gap-0.5 rounded-full px-1.5 py-1 transition-all hover:scale-110 hover:bg-cft-durazno/30 disabled:cursor-wait disabled:opacity-60 ${
+                                          comentario.miReaccion?.type === tipo
+                                            ? 'bg-cft-durazno/40 ring-1 ring-cft-naranja'
+                                            : ''
+                                        }`}
+                                      >
+                                        <span className="text-sm leading-none">
+                                          {emoji}
+                                        </span>
+                                        {(comentario.reactions?.[tipo] ?? 0) >
+                                          0 && (
+                                          <span className="text-xs font-medium text-neutral-600">
+                                            {comentario.reactions[tipo]}
+                                          </span>
+                                        )}
+                                      </button>
+                                    ),
+                                  )}
+                                </div>
+                              </div>
+                              {erroresReaccionComentario[comentario.id] && (
+                                <p
+                                  role="alert"
+                                  className="mt-1 px-2 text-xs text-red-600"
+                                >
+                                  {erroresReaccionComentario[comentario.id]}
+                                </p>
+                              )}
                             </div>
                           </li>
                         )

@@ -28,7 +28,10 @@ export async function crearComentario(postId, comentario) {
 
   const respuesta = await fetch(`${API_URL}/posts/${postId}/comments`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      Authorization: `Bearer ${localStorage.getItem('token')}`,
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify({ content, userId }),
   })
   const datos = await respuesta.json()
